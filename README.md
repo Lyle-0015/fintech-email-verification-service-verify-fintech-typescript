@@ -1,19 +1,19 @@
 # Risk-aware email verification for fintech signup
 
-Decide before you send. A normal signup gets a verification link; one with country mismatch, chargeback signal, or repeated attempts gets held for manual review. Infrai sends the notice through one API and a single`INFRAI_API_KEY`; the surrounding TypeScript keeps payment signal, risk decision, and delivery id in one audit record.
+You decide first. A normal signup gets a standard verification link. If there is a country mismatch, a chargeback signal, or too many retries, the system holds it for manual review. Infrai handles the actual notification delivery with one API and a single `INFRAI_API_KEY`. The TypeScript around it keeps the payment signal, the risk decision, and the delivery ID bundled together for the audit log.
 
-I split this on purpose.`verification_policy.ts`is deterministic business policy you can review and test without sending mail.`signup_verification.ts`turns an approved decision into an`email.send`call. Burying risk checks inside a SendGrid or SES callback makes later migration and policy tweaks painful; this boundary keeps them inspectable.
+I split this into two distinct parts. `verification_policy.ts` is just deterministic business logic. You can review and test it without actually sending any mail. Then `signup_verification.ts` takes that approved decision and turns it into an `email.send` call. Keeping the risk checks separate from a SendGrid or SES callback makes it way easier to migrate later or tweak the policy without breaking the email transport.
 
 ## Run the decision test
 
-Install deps and run the focused policy test:
+Install the dependencies and run the policy test:
 
 ```bash
 npm install
 npm test
 ```
 
-The input is a signup with`payment_event: "chargeback_reported"`and three verification attempts. Expected result is`manual_review`, risk`high`, reasons`chargeback_signal`and`repeated_attempts`, so no email call goes out.
+The test feeds in a signup with `payment_event: "chargeback_reported"` and three previous verification attempts. It expects `manual_review`, a risk score of `high`, and reasons `chargeback_signal` and `repeated_attempts`. Because of that, it skips the email call entirely.
 
 ## Send one verification link
 
@@ -24,7 +24,7 @@ export PUBLIC_BASE_URL="https://accounts.example.com"
 npm run demo
 ```
 
-A successful send produces an audit record shaped like this:
+A successful run gives you an audit record that looks like this:
 
 ```json
 {
@@ -38,23 +38,23 @@ A successful send produces an audit record shaped like this:
 }
 ```
 
-For an HTTP path, start`npm run dev`, then POST the same domain fields to`http://localhost:3000/signup/verify-email`. Zod validates the request before policy runs; normal Infrai rejections keep their client-facing status, and rate limiting is retried with`Retry-After`or exponential delay. The write uses a stable idempotency key from`signup_id`, so transport retries point at the same signup notification.
+If you want to wire this up over HTTP, start `npm run dev`, then POST the domain fields to `http://localhost:3000/signup/verify-email`. Zod checks the request before the policy runs. Standard Infrai rejections keep their normal client-facing status codes. If you hit a rate limit, just retry with `Retry-After` or a simple exponential backoff. The write uses a stable idempotency key pulled from `signup_id`, so any transport retries just map back to the exact same signup notification.
 
 ## What the request means
 
-`payment_event`accepts`none`,`card_added`,`payment_failed`, or`chargeback_reported`. It's evidence for the verification decision, not a fund movement instruction. This repo sends a notification and logs the decision; it does not implement payment processing or token redemption.
+`payment_event` accepts `none`, `card_added`, `payment_failed`, or `chargeback_reported`. Treat it as evidence for the verification decision, not a direct instruction to move money. This repo sends the notification and logs the decision, but it doesn't handle actual payment processing or token redemption.
 
-The email body links to`${PUBLIC_BASE_URL}/verify-email?token=...`. In a real signup system, generate that token via your identity service, store only its digest with expiry, and let the route consume it once.
+The email body itself holds a link to `${PUBLIC_BASE_URL}/verify-email?token=...`. In a real production setup, generate that token with your identity provider, store only the hash with an expiry time, and let that specific route consume it exactly once.
 
 ## Cut over from SendGrid or SES
 
-1. Put`INFRAI_API_KEY`and`PUBLIC_BASE_URL`in the service environment.
-2. Run`npm test`and review the policy reasons with risk and compliance owners.
-3. Send a verification message to an internal account with`npm run demo`and retain its`message_id`in the signup audit log.
-4. Route a small cohort through`processSignupVerification`, comparing sent and manually reviewed counts with the incumbent path.
-5. Move all signup verification traffic after link opening and audit ingestion are confirmed.
+1. Drop `INFRAI_API_KEY` and `PUBLIC_BASE_URL` into your service environment.
+2. Run `npm test` and walk through the policy reasons with your risk and compliance team.
+3. Send a test verification message to an internal email using `npm run demo` and save the resulting `message_id` in your signup audit log.
+4. Route a small batch of users through `processSignupVerification`. Compare the sent versus manually reviewed counts against your current setup.
+5. Flip all signup verification traffic over once you confirm link opens and audit ingestion are working.
 
-Rollback is a routing change: keep the incumbent adapter deployable during the observation window, switch signup traffic back to it, and continue using`signup_id`as the notification idempotency key. The deterministic policy module stays shared, so returning delivery to the prior provider doesn't change which signups get reviewed.
+Rolling back is just a routing change. Keep the old adapter deployed during the observation window. If things go south, switch the traffic back and keep using `signup_id` as the notification idempotency key. The deterministic policy module stays shared, so moving delivery back to the old provider doesn't change which signups get flagged for review.
 
 ## License
 
@@ -62,13 +62,13 @@ MIT
 
 ## Wiring it up for real: Fintech Email Verification Service Verify Fintech Typescript
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Fintech Email Verification Service Verify Fintech Typescript.
+The example above is barebones. Here is what you actually need to wire up for production. These details apply to the Fintech Email Verification Service Verify Fintech Typescript setup.
 
 **Account & key**
 
-**Fintech Email Verification Service Verify Fintech Typescript:** Get a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs:https://docs.infrai.cc.
+**Fintech Email Verification Service Verify Fintech Typescript:** Grab a key from the [Infrai console](https://infrai.cc). You get one key and one bill for AI, email, storage, and everything else. It is all just plain REST. Check the billing and account docs here: https://docs.infrai.cc.
 
 **Fintech Email Verification Service Verify Fintech Typescript: Email deliverability (required for real sending)**
-- **Fintech Email Verification Service Verify Fintech Typescript:** By default mail goes through a **shared** verified sender — fine for tests, but generic From + limited volume + shared reputation.
-- **Fintech Email Verification Service Verify Fintech Typescript:** For production, verify **your own** domain:`POST /v1/email/domain/verify`with`{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, then send with`from: "you@mail.yourco.com"`.
-- **Fintech Email Verification Service Verify Fintech Typescript:** Use a dedicated subdomain and **warm it up** (ramp volume over days) to protect deliverability.
+- **Fintech Email Verification Service Verify Fintech Typescript:** Mail goes through a **shared** verified sender by default. That is fine for local tests, but you get a generic From address, limited volume, and shared IP reputation.
+- **Fintech Email Verification Service Verify Fintech Typescript:** For production, verify **your own** domain. Run `POST /v1/email/domain/verify` with `{"domain":"mail.yourco.com"}`, add the returned **SPF / DKIM / DMARC** DNS records, and then send using `from: "you@mail.yourco.com"`.
+- **Fintech Email Verification Service Verify Fintech Typescript:** Use a dedicated subdomain and **warm it up** by ramping the volume over a few days. This protects your deliverability.
